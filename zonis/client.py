@@ -89,44 +89,41 @@ class Client(RouteHandler):
         """Create a connection to the server with IPv6 support"""
         try:
             # Try to resolve the hostname first
-            addrinfo = await asyncio.get_event_loop().getaddrinfo(
-                self.host,
-                self.port,
-                family=socket.AF_UNSPEC,  # Allow both IPv4 and IPv6
-                type=socket.SOCK_STREAM,
+            try:
+                addrinfo = socket.getaddrinfo(
+                    self.host,
+                    self.port,
+                    socket.AF_UNSPEC,
+                    socket.SOCK_STREAM,
+                )
+                # Check if the resolved address is IPv6
+                is_ipv6 = any(family == socket.AF_INET6 for family, *_ in addrinfo)
+                if is_ipv6 and not self.host.startswith('['):
+                    ws_url = f"ws://[{self.host}]:{self.port}"
+                else:
+                    ws_url = f"ws://{self.host}:{self.port}"
+            except socket.gaierror:
+                # If resolution fails, try direct connection with original host
+                if ':' in self.host and not self.host.startswith('['):
+                    ws_url = f"ws://[{self.host}]:{self.port}"
+                else:
+                    ws_url = f"ws://{self.host}:{self.port}"
+            
+            # Create connection
+            websocket = await websockets.connect(
+                ws_url,
+                family=socket.AF_INET6 if self.ipv6 else socket.AF_INET
             )
             
-            # Get the first working address
-            for family, type, proto, canonname, sockaddr in addrinfo:
-                try:
-                    # Always use the hostname for the websocket URL, not the resolved IP
-                    ws_url = f"ws://{self.host}:{self.port}"
-                    
-                    # Create connection using resolved family
-                    websocket = await websockets.connect(
-                        ws_url,
-                        family=family,
-                        host=sockaddr[0]  # Use resolved IP for actual connection
-                    )
-                    
-                    self._router = Router(self._identifier, websocket)
-                    self._router.register_receiver(self._request_handler)
-                    
-                    await self._router.connect_client(
-                        secret_key=self._secret_key,
-                        override_key=self._override_key,
-                    )
-                    
-                    self.__is_open = True
-                    self.ipv6 = (family == socket.AF_INET6)
-                    return
-                    
-                except (socket.gaierror, ConnectionError) as e:
-                    last_error = e
-                    continue
+            self._router = Router(self._identifier, websocket)
+            self._router.register_receiver(self._request_handler)
             
-            # If we get here, no connection succeeded
-            raise last_error if 'last_error' in locals() else ConnectionError("Failed to connect to any address")
+            await self._router.connect_client(
+                secret_key=self._secret_key,
+                override_key=self._override_key,
+            )
+            
+            self.__is_open = True
             
         except Exception as e:
             log.error(f"Connection failed: {str(e)}")
