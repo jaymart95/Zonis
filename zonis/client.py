@@ -88,26 +88,8 @@ class Client(RouteHandler):
     async def _create_connection(self) -> None:
         """Create a connection to the server with IPv6 support"""
         try:
-            # Try to resolve the hostname first
-            try:
-                addrinfo = socket.getaddrinfo(
-                    self.host,
-                    self.port,
-                    socket.AF_UNSPEC,
-                    socket.SOCK_STREAM,
-                )
-                # Check if the resolved address is IPv6
-                is_ipv6 = any(family == socket.AF_INET6 for family, *_ in addrinfo)
-                if is_ipv6 and not self.host.startswith('['):
-                    ws_url = f"ws://[{self.host}]:{self.port}"
-                else:
-                    ws_url = f"ws://{self.host}:{self.port}"
-            except socket.gaierror:
-                # If resolution fails, try direct connection with original host
-                if ':' in self.host and not self.host.startswith('['):
-                    ws_url = f"ws://[{self.host}]:{self.port}"
-                else:
-                    ws_url = f"ws://{self.host}:{self.port}"
+            # Use the actual host in the URL
+            ws_url = f"ws://{self.host}:{self.port}"
             
             # Create connection
             websocket = await websockets.connect(

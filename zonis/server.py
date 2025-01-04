@@ -52,25 +52,38 @@ class Server(RouteHandler):
 
     def _setup_socket(self) -> None:
         """Setup the server socket with IPv6 support"""
-        # Use AF_INET6 for IPv6 support
-        self.sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
-        
-        # Enable dual-stack socket (IPv4 + IPv6) if requested
-        if self.dual_stack:
-            try:
-                self.sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
-            except (AttributeError, socket.error) as e:
-                self.logger.warning(f"Could not enable dual-stack mode: {e}")
-
-        # Set socket options
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.setblocking(False)
-        
         try:
-            self.sock.bind((self.host, self.port))
-            self.sock.listen(self.backlog)
-        except socket.error as e:
-            self.logger.error(f"Failed to bind to {self.host}:{self.port}: {e}")
+            # Use AF_INET6 for IPv6 support
+            self.sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+            
+            # Enable dual-stack socket (IPv4 + IPv6) if requested
+            if self.dual_stack:
+                try:
+                    self.sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+                except (AttributeError, socket.error) as e:
+                    self.logger.warning(f"Could not enable dual-stack mode: {e}")
+            
+            # Set socket options
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.sock.setblocking(False)
+            
+            # Handle IPv6 address binding
+            bind_host = self.host
+            if self.host == "localhost":
+                bind_host = "::" if self.dual_stack else "::1"
+            elif self.host == "0.0.0.0":
+                bind_host = "::"
+            
+            try:
+                self.sock.bind((bind_host, self.port))
+                self.sock.listen(self.backlog)
+                self.logger.info(f"Server bound to {bind_host}:{self.port}")
+            except socket.error as e:
+                self.logger.error(f"Failed to bind to {bind_host}:{self.port}: {e}")
+                raise
+            
+        except Exception as e:
+            self.logger.error(f"Failed to setup socket: {e}")
             raise
 
     def accept(self) -> Tuple[socket.socket, Union[Tuple[str, int], Tuple[str, int, int, int]]]:
