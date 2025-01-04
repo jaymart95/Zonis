@@ -99,19 +99,14 @@ class Client(RouteHandler):
             # Get the first working address
             for family, type, proto, canonname, sockaddr in addrinfo:
                 try:
-                    # Format the websocket URL appropriately
-                    host = sockaddr[0]
-                    if family == socket.AF_INET6:
-                        ws_url = f"ws://[{host}]:{self.port}"
-                        self.ipv6 = True
-                    else:
-                        ws_url = f"ws://{host}:{self.port}"
-                        self.ipv6 = False
+                    # Always use the hostname for the websocket URL, not the resolved IP
+                    ws_url = f"ws://{self.host}:{self.port}"
                     
                     # Create connection using resolved family
                     websocket = await websockets.connect(
                         ws_url,
-                        family=family
+                        family=family,
+                        host=sockaddr[0]  # Use resolved IP for actual connection
                     )
                     
                     self._router = Router(self._identifier, websocket)
@@ -123,6 +118,7 @@ class Client(RouteHandler):
                     )
                     
                     self.__is_open = True
+                    self.ipv6 = (family == socket.AF_INET6)
                     return
                     
                 except (socket.gaierror, ConnectionError) as e:
