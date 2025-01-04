@@ -1,7 +1,9 @@
+import socket
+import selectors
 import logging
 import secrets
 import traceback
-from typing import Dict, Literal, Any, cast, Optional, Callable
+from typing import Dict, Literal, Any, cast, Optional, Callable, Tuple, Union
 
 from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError
 
@@ -34,20 +36,59 @@ class Server(RouteHandler):
 
     def __init__(
         self,
-        *,
-        using_fastapi_websockets: bool = False,
-        override_key: Optional[str] = None,
-        secret_key: str = "",
-    ) -> None:
-        super().__init__()
-        self._connections: dict[str, Router] = {}
-        self._secret_key: str = secret_key
-        self._override_key: Optional[str] = (
-            override_key if override_key is not None else secrets.token_hex(64)
-        )
-        self.using_fastapi_websockets: bool = using_fastapi_websockets
+        host: str = "::",
+        port: int = 8000,
+        backlog: int = 100,
+        dual_stack: bool = True
+    ):
+        self.host = host
+        self.port = port
+        self.backlog = backlog
+        self.dual_stack = dual_stack
+        self.selector = selectors.DefaultSelector()
+        self.sock: Optional[socket.socket] = None
+        self.running = False
+        self._setup_logging()
 
-        self.__is_open = True
+    def _setup_socket(self) -> None:
+        """Setup the server socket with IPv6 support"""
+        # Use AF_INET6 for IPv6 support
+        self.sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        
+        # Enable dual-stack socket (IPv4 + IPv6) if requested
+        if self.dual_stack:
+            try:
+                self.sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            except (AttributeError, socket.error) as e:
+                self.logger.warning(f"Could not enable dual-stack mode: {e}")
+
+        # Set socket options
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.setblocking(False)
+        
+        try:
+            self.sock.bind((self.host, self.port))
+            self.sock.listen(self.backlog)
+        except socket.error as e:
+            self.logger.error(f"Failed to bind to {self.host}:{self.port}: {e}")
+            raise
+
+    def accept(self) -> Tuple[socket.socket, Union[Tuple[str, int], Tuple[str, int, int, int]]]:
+        """Accept a connection and return client socket and address"""
+        client, addr = self.sock.accept()
+        client.setblocking(False)
+        return client, addr
+
+    def _setup_logging(self) -> None:
+        self.logger = logging.getLogger(__name__)
+        if not self.logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter(
+                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            )
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+            self.logger.setLevel(logging.INFO)
 
     async def disconnect(self, identifier: str) -> None:
         """Disconnect a client connection.

@@ -1,4 +1,4 @@
-from typing import TypedDict, Any, Optional, Literal, Type, Dict
+from typing import TypedDict, Any, Optional, Literal, Type, Dict, Union, Tuple
 
 from zonis.exceptions import (
     BaseZonisException,
@@ -12,6 +12,15 @@ custom_close_codes: Dict[int, Type[BaseZonisException]] = {
     3001: UnhandledWebsocketType,
 }
 
+# Add new type for IPv6 address information
+AddressInfo = Union[
+    Tuple[str, int],  # IPv4: (address, port)
+    Tuple[str, int, int, int]  # IPv6: (address, port, flowinfo, scopeid)
+]
+
+class ConnectionInfo(TypedDict):
+    address: AddressInfo
+    family: Literal["IPv4", "IPv6"]
 
 class Packet(TypedDict):
     data: Any
@@ -39,7 +48,7 @@ class IdentifyDataPacket(TypedDict):
 class IdentifyPacket(TypedDict):
     identifier: str
     type: Literal["IDENTIFY"]
-    data: IdentifyDataPacket
+    data: dict[str, Union[str, ConnectionInfo]]
 
 
 class ClientToServerPacket(TypedDict):

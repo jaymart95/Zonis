@@ -1,8 +1,10 @@
 import asyncio
 import logging
+import websockets
+import socket
 
 import signal
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union, Tuple
 
 
 from zonis import (
@@ -36,36 +38,24 @@ class Client(RouteHandler):
 
     def __init__(
         self,
-        *,
-        reconnect_attempt_count: int = 1,
-        url: str = "ws://localhost",
-        port: Optional[int] = None,
+        host: str = "::1",
+        port: int = 8000,
         identifier: str = "DEFAULT",
+        *,
         secret_key: str = "",
         override_key: Optional[str] = None,
+        ipv6: bool = True,
     ) -> None:
         super().__init__()
-        url = f"{url}:{port}" if port else url
-        url = (
-            f"ws://{url}"
-            if not url.startswith("ws://") and not url.startswith("wss://")
-            else url
-        )
-        self._url: str = url
-        self.identifier: str = identifier
-        self._reconnect_attempt_count: int = reconnect_attempt_count
-        self._connection_future: asyncio.Future = asyncio.Future()
-
-        self._secret_key: str = secret_key
-        self._override_key: str = override_key
-        self.__is_open: bool = True
-        self.__current_ws = None
-        self.__task: Optional[asyncio.Task] = None
-        self._instance_mapping: Dict[str, Any] = {}
-
-        self.router: Router = Router(self.identifier, None).register_receiver(
-            self._request_handler
-        )
+        self.host = host
+        self.port = port
+        self._identifier = identifier
+        self._secret_key = secret_key
+        self._override_key = override_key
+        self.ipv6 = ipv6
+        
+        self._router: Optional[Router] = None
+        self.__is_open = False
 
         # https://github.com/gearbot/GearBot/blob/live/GearBot/GearBot.py
         try:
@@ -84,12 +74,7 @@ class Client(RouteHandler):
     async def start(self) -> None:
         """Start the IPC client."""
         self.load_routes()
-        await self.router.connect_client(
-            self._url,
-            idp=IdentifyDataPacket(
-                secret_key=self._secret_key, override_key=self._override_key
-            ),
-        )
+        await self._create_connection()
         log.info(
             "Successfully connected to the server with identifier %s",
             self.identifier,
@@ -99,6 +84,37 @@ class Client(RouteHandler):
         """Stop the IPC client."""
         await self.router.close()
         log.info("Successfully closed the client")
+
+    async def _create_connection(self) -> None:
+        """Create a connection to the server with IPv6 support"""
+        # Choose address family based on ipv6 flag
+        family = socket.AF_INET6 if self.ipv6 else socket.AF_INET
+        
+        try:
+            # Create connection using appropriate address family
+            websocket = await websockets.connect(
+                f"ws://[{self.host}]:{self.port}" if self.ipv6 else f"ws://{self.host}:{self.port}",
+                family=family
+            )
+            
+            self._router = Router(self._identifier, websocket)
+            self._router.register_receiver(self._request_handler)
+            
+            await self._router.connect_client(
+                secret_key=self._secret_key,
+                override_key=self._override_key,
+            )
+            
+            self.__is_open = True
+            
+        except socket.gaierror as e:
+            # Handle IPv6 connection failures
+            if self.ipv6:
+                logging.warning(f"IPv6 connection failed: {e}. Falling back to IPv4...")
+                self.ipv6 = False
+                await self._create_connection()
+            else:
+                raise ConnectionError(f"Failed to connect: {e}")
 
     async def _request_handler(self, packet_data, resolution_handler):
         data: RequestPacket = packet_data["data"]
