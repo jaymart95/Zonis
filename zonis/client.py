@@ -87,34 +87,62 @@ class Client(RouteHandler):
 
     async def _create_connection(self) -> None:
         """Create a connection to the server with IPv6 support"""
-        # Choose address family based on ipv6 flag
-        family = socket.AF_INET6 if self.ipv6 else socket.AF_INET
-        
         try:
-            # Create connection using appropriate address family
-            websocket = await websockets.connect(
-                f"ws://[{self.host}]:{self.port}" if self.ipv6 else f"ws://{self.host}:{self.port}",
-                family=family
+            # Try to resolve the hostname first
+            addrinfo = await asyncio.get_event_loop().getaddrinfo(
+                self.host,
+                self.port,
+                family=socket.AF_UNSPEC,  # Allow both IPv4 and IPv6
+                type=socket.SOCK_STREAM,
             )
             
-            self._router = Router(self._identifier, websocket)
-            self._router.register_receiver(self._request_handler)
+            # Get the first working address
+            for family, type, proto, canonname, sockaddr in addrinfo:
+                try:
+                    # Format the websocket URL appropriately
+                    host = sockaddr[0]
+                    if family == socket.AF_INET6:
+                        ws_url = f"ws://[{host}]:{self.port}"
+                        self.ipv6 = True
+                    else:
+                        ws_url = f"ws://{host}:{self.port}"
+                        self.ipv6 = False
+                    
+                    # Create connection using resolved family
+                    websocket = await websockets.connect(
+                        ws_url,
+                        family=family
+                    )
+                    
+                    self._router = Router(self._identifier, websocket)
+                    self._router.register_receiver(self._request_handler)
+                    
+                    await self._router.connect_client(
+                        secret_key=self._secret_key,
+                        override_key=self._override_key,
+                    )
+                    
+                    self.__is_open = True
+                    return
+                    
+                except (socket.gaierror, ConnectionError) as e:
+                    last_error = e
+                    continue
             
-            await self._router.connect_client(
-                secret_key=self._secret_key,
-                override_key=self._override_key,
-            )
+            # If we get here, no connection succeeded
+            raise last_error if 'last_error' in locals() else ConnectionError("Failed to connect to any address")
             
-            self.__is_open = True
-            
-        except socket.gaierror as e:
-            # Handle IPv6 connection failures
-            if self.ipv6:
-                logging.warning(f"IPv6 connection failed: {e}. Falling back to IPv4...")
-                self.ipv6 = False
-                await self._create_connection()
-            else:
-                raise ConnectionError(f"Failed to connect: {e}")
+        except Exception as e:
+            log.error(f"Connection failed: {str(e)}")
+            raise ConnectionError(f"Failed to connect: {e}")
+
+    def _is_ip_address(self, host: str) -> bool:
+        """Check if the host is an IP address"""
+        try:
+            socket.inet_pton(socket.AF_INET6 if self.ipv6 else socket.AF_INET, host)
+            return True
+        except (socket.error, ValueError):
+            return False
 
     async def _request_handler(self, packet_data, resolution_handler):
         data: RequestPacket = packet_data["data"]
